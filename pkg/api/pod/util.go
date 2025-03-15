@@ -19,7 +19,6 @@ package pod
 import (
 	"strings"
 
-	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	metavalidation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -418,7 +417,7 @@ func GetValidationOptionsFromPodSpecAndMeta(podSpec, oldPodSpec *api.PodSpec, po
 			}
 		}
 
-		opts.AllowPodLifecycleSleepActionZeroValue = opts.AllowPodLifecycleSleepActionZeroValue || podLifecycleSleepActionZeroValueInUse(podSpec)
+		opts.AllowPodLifecycleSleepActionZeroValue = opts.AllowPodLifecycleSleepActionZeroValue || podLifecycleSleepActionZeroValueInUse(oldPodSpec)
 		// If oldPod has resize policy set on the restartable init container, we must allow it
 		opts.AllowSidecarResizePolicy = opts.AllowSidecarResizePolicy || hasRestartableInitContainerResizePolicy(oldPodSpec)
 	}
@@ -775,7 +774,7 @@ func podLifecycleSleepActionZeroValueInUse(podSpec *api.PodSpec) bool {
 			inUse = true
 			return false
 		}
-		if c.Lifecycle.PostStart != nil && c.Lifecycle.PostStart.Sleep != nil && c.Lifecycle.PreStop.Sleep.Seconds == 0 {
+		if c.Lifecycle.PostStart != nil && c.Lifecycle.PostStart.Sleep != nil && c.Lifecycle.PostStart.Sleep.Seconds == 0 {
 			inUse = true
 			return false
 		}
@@ -853,6 +852,13 @@ func dropDisabledPodStatusFields(podStatus, oldPodStatus *api.PodStatus, podSpec
 		dropUserField(podStatus.InitContainerStatuses)
 		dropUserField(podStatus.ContainerStatuses)
 		dropUserField(podStatus.EphemeralContainerStatuses)
+	}
+
+	if !utilfeature.DefaultFeatureGate.Enabled(features.PodObservedGenerationTracking) && !podObservedGenerationTrackingInUse(oldPodStatus) {
+		podStatus.ObservedGeneration = 0
+		for i := range podStatus.Conditions {
+			podStatus.Conditions[i].ObservedGeneration = 0
+		}
 	}
 }
 
@@ -1050,16 +1056,26 @@ func nodeTaintsPolicyInUse(podSpec *api.PodSpec) bool {
 
 // hostUsersInUse returns true if the pod spec has spec.hostUsers field set.
 func hostUsersInUse(podSpec *api.PodSpec) bool {
-	if podSpec != nil && podSpec.SecurityContext != nil && podSpec.SecurityContext.HostUsers != nil {
-		return true
-	}
-
-	return false
+	return podSpec != nil && podSpec.SecurityContext != nil && podSpec.SecurityContext.HostUsers != nil
 }
 
 func supplementalGroupsPolicyInUse(podSpec *api.PodSpec) bool {
-	if podSpec != nil && podSpec.SecurityContext != nil && podSpec.SecurityContext.SupplementalGroupsPolicy != nil {
+	return podSpec != nil && podSpec.SecurityContext != nil && podSpec.SecurityContext.SupplementalGroupsPolicy != nil
+}
+
+func podObservedGenerationTrackingInUse(podStatus *api.PodStatus) bool {
+	if podStatus == nil {
+		return false
+	}
+
+	if podStatus.ObservedGeneration != 0 {
 		return true
+	}
+
+	for _, condition := range podStatus.Conditions {
+		if condition.ObservedGeneration != 0 {
+			return true
+		}
 	}
 
 	return false
@@ -1283,43 +1299,6 @@ func hasInvalidLabelValueInRequiredNodeAffinity(spec *api.PodSpec) bool {
 		return false
 	}
 	return helper.HasInvalidLabelValueInNodeSelectorTerms(spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms)
-}
-
-func MarkPodProposedForResize(oldPod, newPod *api.Pod) {
-	if len(newPod.Spec.Containers) != len(oldPod.Spec.Containers) {
-		// Update is invalid: ignore changes and let validation handle it
-		return
-	}
-
-	if utilfeature.DefaultFeatureGate.Enabled(features.SidecarContainers) && len(newPod.Spec.InitContainers) != len(oldPod.Spec.InitContainers) {
-		return
-	}
-
-	for i, c := range newPod.Spec.Containers {
-		if c.Name != oldPod.Spec.Containers[i].Name {
-			return // Update is invalid (container mismatch): let validation handle it.
-		}
-		if apiequality.Semantic.DeepEqual(oldPod.Spec.Containers[i].Resources, c.Resources) {
-			continue
-		}
-		newPod.Status.Resize = api.PodResizeStatusProposed
-		return
-	}
-
-	if utilfeature.DefaultFeatureGate.Enabled(features.SidecarContainers) {
-		for i, c := range newPod.Spec.InitContainers {
-			if IsRestartableInitContainer(&c) {
-				if c.Name != oldPod.Spec.InitContainers[i].Name {
-					return // Update is invalid (container mismatch): let validation handle it.
-				}
-				if apiequality.Semantic.DeepEqual(oldPod.Spec.InitContainers[i].Resources, c.Resources) {
-					continue
-				}
-				newPod.Status.Resize = api.PodResizeStatusProposed
-				return
-			}
-		}
-	}
 }
 
 // KEP: https://kep.k8s.io/4639

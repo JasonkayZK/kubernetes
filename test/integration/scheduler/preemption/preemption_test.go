@@ -59,7 +59,6 @@ import (
 	"k8s.io/kubernetes/plugin/pkg/admission/priority"
 	testutils "k8s.io/kubernetes/test/integration/util"
 	"k8s.io/kubernetes/test/utils/ktesting"
-	"k8s.io/utils/pointer"
 	"k8s.io/utils/ptr"
 )
 
@@ -84,26 +83,6 @@ var (
 const filterPluginName = "filter-plugin"
 
 var lowPriority, mediumPriority, highPriority = int32(100), int32(200), int32(300)
-
-func waitForNominatedNodeNameWithTimeout(ctx context.Context, cs clientset.Interface, pod *v1.Pod, timeout time.Duration) error {
-	if err := wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, timeout, false, func(ctx context.Context) (bool, error) {
-		pod, err := cs.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
-		if err != nil {
-			return false, err
-		}
-		if len(pod.Status.NominatedNodeName) > 0 {
-			return true, nil
-		}
-		return false, err
-	}); err != nil {
-		return fmt.Errorf(".status.nominatedNodeName of Pod %v/%v did not get set: %v", pod.Namespace, pod.Name, err)
-	}
-	return nil
-}
-
-func waitForNominatedNodeName(ctx context.Context, cs clientset.Interface, pod *v1.Pod) error {
-	return waitForNominatedNodeNameWithTimeout(ctx, cs, pod, wait.ForeverTestTimeout)
-}
 
 const tokenFilterName = "token-filter"
 
@@ -175,7 +154,7 @@ func TestPreemption(t *testing.T) {
 	}
 	cfg := configtesting.V1ToInternalWithDefaults(t, configv1.KubeSchedulerConfiguration{
 		Profiles: []configv1.KubeSchedulerProfile{{
-			SchedulerName: pointer.String(v1.DefaultSchedulerName),
+			SchedulerName: ptr.To(v1.DefaultSchedulerName),
 			Plugins: &configv1.Plugins{
 				Filter: configv1.PluginSet{
 					Enabled: []configv1.Plugin{
@@ -505,7 +484,7 @@ func TestPreemption(t *testing.T) {
 				}
 				// Also check that the preemptor pod gets the NominatedNodeName field set.
 				if len(test.preemptedPodIndexes) > 0 {
-					if err := waitForNominatedNodeName(testCtx.Ctx, cs, preemptor); err != nil {
+					if err := testutils.WaitForNominatedNodeName(testCtx.Ctx, cs, preemptor); err != nil {
 						t.Errorf("NominatedNodeName field was not set for pod %v: %v", preemptor.Name, err)
 					}
 				}
@@ -874,7 +853,7 @@ func TestAsyncPreemption(t *testing.T) {
 			}
 			cfg := configtesting.V1ToInternalWithDefaults(t, configv1.KubeSchedulerConfiguration{
 				Profiles: []configv1.KubeSchedulerProfile{{
-					SchedulerName: pointer.String(v1.DefaultSchedulerName),
+					SchedulerName: ptr.To(v1.DefaultSchedulerName),
 					Plugins: &configv1.Plugins{
 						MultiPoint: configv1.PluginSet{
 							Enabled: []configv1.Plugin{
@@ -1087,7 +1066,7 @@ func TestNonPreemption(t *testing.T) {
 					t.Fatalf("Error while creating preemptor: %v", err)
 				}
 
-				err = waitForNominatedNodeNameWithTimeout(testCtx.Ctx, cs, preemptorPod, 5*time.Second)
+				err = testutils.WaitForNominatedNodeNameWithTimeout(testCtx.Ctx, cs, preemptorPod, 5*time.Second)
 				// test.PreemptionPolicy == nil means we expect the preemptor to be nominated.
 				expect := test.PreemptionPolicy == nil
 				// err == nil indicates the preemptor is indeed nominated.
@@ -1169,7 +1148,7 @@ func TestDisablePreemption(t *testing.T) {
 				}
 
 				// Ensure preemptor should not be nominated.
-				if err := waitForNominatedNodeNameWithTimeout(testCtx.Ctx, cs, preemptor, 5*time.Second); err == nil {
+				if err := testutils.WaitForNominatedNodeNameWithTimeout(testCtx.Ctx, cs, preemptor, 5*time.Second); err == nil {
 					t.Errorf("Preemptor %v should not be nominated", preemptor.Name)
 				}
 
@@ -1382,7 +1361,7 @@ func TestPreemptionStarvation(t *testing.T) {
 					t.Errorf("Error while creating the preempting pod: %v", err)
 				}
 				// Check if .status.nominatedNodeName of the preemptor pod gets set.
-				if err := waitForNominatedNodeName(testCtx.Ctx, cs, preemptor); err != nil {
+				if err := testutils.WaitForNominatedNodeName(testCtx.Ctx, cs, preemptor); err != nil {
 					t.Errorf(".status.nominatedNodeName was not set for pod %v/%v: %v", preemptor.Namespace, preemptor.Name, err)
 				}
 				// Make sure that preemptor is scheduled after preemptions.
@@ -1482,7 +1461,7 @@ func TestPreemptionRaces(t *testing.T) {
 						}
 					}
 					// Check that the preemptor pod gets nominated node name.
-					if err := waitForNominatedNodeName(testCtx.Ctx, cs, preemptor); err != nil {
+					if err := testutils.WaitForNominatedNodeName(testCtx.Ctx, cs, preemptor); err != nil {
 						t.Errorf(".status.nominatedNodeName was not set for pod %v/%v: %v", preemptor.Namespace, preemptor.Name, err)
 					}
 					// Make sure that preemptor is scheduled after preemptions.
@@ -1578,8 +1557,8 @@ func TestNominatedNodeCleanUp(t *testing.T) {
 			},
 			postChecks: []func(ctx context.Context, cs clientset.Interface, pod *v1.Pod) error{
 				testutils.WaitForPodToSchedule,
-				waitForNominatedNodeName,
-				waitForNominatedNodeName,
+				testutils.WaitForNominatedNodeName,
+				testutils.WaitForNominatedNodeName,
 			},
 		},
 		{
@@ -1598,7 +1577,7 @@ func TestNominatedNodeCleanUp(t *testing.T) {
 			},
 			postChecks: []func(ctx context.Context, cs clientset.Interface, pod *v1.Pod) error{
 				testutils.WaitForPodToSchedule,
-				waitForNominatedNodeName,
+				testutils.WaitForNominatedNodeName,
 				testutils.WaitForPodToSchedule,
 			},
 			podNamesToDelete: []string{"low"},
@@ -1616,7 +1595,7 @@ func TestNominatedNodeCleanUp(t *testing.T) {
 			},
 			postChecks: []func(ctx context.Context, cs clientset.Interface, pod *v1.Pod) error{
 				testutils.WaitForPodToSchedule,
-				waitForNominatedNodeName,
+				testutils.WaitForNominatedNodeName,
 			},
 			// Delete the node to simulate an ErrNoNodesAvailable error.
 			deleteNode:       true,
@@ -1635,7 +1614,7 @@ func TestNominatedNodeCleanUp(t *testing.T) {
 			},
 			postChecks: []func(ctx context.Context, cs clientset.Interface, pod *v1.Pod) error{
 				testutils.WaitForPodToSchedule,
-				waitForNominatedNodeName,
+				testutils.WaitForNominatedNodeName,
 			},
 			podNamesToDelete: []string{fmt.Sprintf("low-%v", doNotFailMe)},
 			customPlugins: &configv1.Plugins{
@@ -1654,7 +1633,7 @@ func TestNominatedNodeCleanUp(t *testing.T) {
 			t.Run(fmt.Sprintf("%s (Async preemption enabled: %v)", tt.name, asyncPreemptionEnabled), func(t *testing.T) {
 				cfg := configtesting.V1ToInternalWithDefaults(t, configv1.KubeSchedulerConfiguration{
 					Profiles: []configv1.KubeSchedulerProfile{{
-						SchedulerName: pointer.String(v1.DefaultSchedulerName),
+						SchedulerName: ptr.To(v1.DefaultSchedulerName),
 						Plugins:       tt.customPlugins,
 					}},
 				})
@@ -1991,7 +1970,7 @@ func TestPDBInPreemption(t *testing.T) {
 				}
 				// Also check if .status.nominatedNodeName of the preemptor pod gets set.
 				if len(test.preemptedPodIndexes) > 0 {
-					if err := waitForNominatedNodeName(testCtx.Ctx, cs, preemptor); err != nil {
+					if err := testutils.WaitForNominatedNodeName(testCtx.Ctx, cs, preemptor); err != nil {
 						t.Errorf("Test [%v]: .status.nominatedNodeName was not set for pod %v/%v: %v", test.name, preemptor.Namespace, preemptor.Name, err)
 					}
 				}
@@ -2146,7 +2125,7 @@ func TestPreferNominatedNode(t *testing.T) {
 func TestReadWriteOncePodPreemption(t *testing.T) {
 	cfg := configtesting.V1ToInternalWithDefaults(t, configv1.KubeSchedulerConfiguration{
 		Profiles: []configv1.KubeSchedulerProfile{{
-			SchedulerName: pointer.StringPtr(v1.DefaultSchedulerName),
+			SchedulerName: ptr.To(v1.DefaultSchedulerName),
 			Plugins: &configv1.Plugins{
 				Filter: configv1.PluginSet{
 					Enabled: []configv1.Plugin{
@@ -2484,7 +2463,7 @@ func TestReadWriteOncePodPreemption(t *testing.T) {
 				}
 				// Also check that the preemptor pod gets the NominatedNodeName field set.
 				if len(test.preemptedPodIndexes) > 0 {
-					if err := waitForNominatedNodeName(testCtx.Ctx, cs, preemptor); err != nil {
+					if err := testutils.WaitForNominatedNodeName(testCtx.Ctx, cs, preemptor); err != nil {
 						t.Errorf("NominatedNodeName field was not set for pod %v: %v", preemptor.Name, err)
 					}
 				}

@@ -409,6 +409,12 @@ func (p *PodWrapper) Node(s string) *PodWrapper {
 	return p
 }
 
+// Tolerations sets `tolerations` as the tolerations of the inner pod.
+func (p *PodWrapper) Tolerations(tolerations []v1.Toleration) *PodWrapper {
+	p.Spec.Tolerations = tolerations
+	return p
+}
+
 // NodeSelector sets `m` as the nodeSelector of the inner pod.
 func (p *PodWrapper) NodeSelector(m map[string]string) *PodWrapper {
 	p.Spec.NodeSelector = m
@@ -1099,6 +1105,28 @@ func (wrapper *ResourceClaimWrapper) Request(deviceClassName string) *ResourceCl
 			AllocationMode:  resourceapi.DeviceAllocationModeExactCount,
 			Count:           1,
 			DeviceClassName: deviceClassName,
+		},
+	)
+	return wrapper
+}
+
+// RequestWithPrioritizedList adds one device request with one subrequest
+// per provided deviceClassName.
+func (wrapper *ResourceClaimWrapper) RequestWithPrioritizedList(deviceClassNames ...string) *ResourceClaimWrapper {
+	var prioritizedList []resourceapi.DeviceSubRequest
+	for i, deviceClassName := range deviceClassNames {
+		prioritizedList = append(prioritizedList, resourceapi.DeviceSubRequest{
+			Name:            fmt.Sprintf("subreq-%d", i+1),
+			AllocationMode:  resourceapi.DeviceAllocationModeExactCount,
+			Count:           1,
+			DeviceClassName: deviceClassName,
+		})
+	}
+
+	wrapper.Spec.Devices.Requests = append(wrapper.Spec.Devices.Requests,
+		resourceapi.DeviceRequest{
+			Name:           fmt.Sprintf("req-%d", len(wrapper.Spec.Devices.Requests)+1),
+			FirstAvailable: prioritizedList,
 		},
 	)
 	return wrapper

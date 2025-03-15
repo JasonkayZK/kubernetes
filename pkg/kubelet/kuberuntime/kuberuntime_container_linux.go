@@ -30,7 +30,7 @@ import (
 	"time"
 
 	cadvisorv1 "github.com/google/cadvisor/info/v1"
-	libcontainercgroups "github.com/opencontainers/runc/libcontainer/cgroups"
+	libcontainercgroups "github.com/opencontainers/cgroups"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -245,6 +245,17 @@ func (m *kubeGenericRuntimeManager) generateContainerResources(pod *v1.Pod, cont
 	}
 	return &runtimeapi.ContainerResources{
 		Linux: m.generateLinuxContainerResources(pod, container, enforceMemoryQoS),
+	}
+}
+
+// generateUpdatePodSandboxResourcesRequest generates platform specific (linux) podsandox resources config for runtime
+func (m *kubeGenericRuntimeManager) generateUpdatePodSandboxResourcesRequest(sandboxID string, pod *v1.Pod, podResources *cm.ResourceConfig) *runtimeapi.UpdatePodSandboxResourcesRequest {
+
+	podResourcesWithoutOverhead := subtractOverheadFromResourceConfig(podResources, pod)
+	return &runtimeapi.UpdatePodSandboxResourcesRequest{
+		PodSandboxId: sandboxID,
+		Overhead:     m.convertOverheadToLinuxResources(pod),
+		Resources:    convertResourceConfigToLinuxContainerResources(podResourcesWithoutOverhead),
 	}
 }
 

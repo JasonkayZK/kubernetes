@@ -13,8 +13,6 @@
 
 run:
   timeout: 30m
-  skip-files:
-    - "^zz_generated.*"
 
 output:
   sort-results: true
@@ -30,6 +28,9 @@ issues:
   exclude:
     # staticcheck: Developers tend to write in C-style with an explicit 'break' in a 'switch', so it's ok to ignore
     - ineffective break statement. Did you mean to break out of the outer loop
+
+  exclude-files:
+    - "^zz_generated.*"
 
   # Excluding configuration per-path, per-linter, per-text and per-source
   exclude-rules:
@@ -47,7 +48,7 @@ issues:
     # Adding unversioned feature gates is allowed in tests
     - linters:
         - forbidigo
-      text: should not use MutableFeatureGate.Add, use AddVersioned instead
+      text: should not use Add, use AddVersioned instead
       path: _test.go$
 
     # The Kubernetes naming convention for conversion functions uses underscores
@@ -204,8 +205,7 @@ linters-settings: # please keep this alphabetized
       msg: should not be used because managedFields was removed
     - p: \.Add$
       pkg: ^k8s\.io/component-base/featuregate$
-      type: ^MutableFeatureGate$
-      msg: should not use MutableFeatureGate.Add, use AddVersioned instead
+      msg: should not use Add, use AddVersioned instead
     - p: ^gomega\.BeTrue$
       pkg: ^github.com/onsi/gomega$
       msg: "it does not produce a good failure message - use BeTrueBecause with an explicit printf-style failure message instead, or plain Go: if ... { ginkgo.Fail(...) }"

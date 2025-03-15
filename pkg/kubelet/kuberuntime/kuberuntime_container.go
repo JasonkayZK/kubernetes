@@ -33,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	codes "google.golang.org/grpc/codes"
 	crierror "k8s.io/cri-api/pkg/errors"
 
 	"github.com/opencontainers/selinux/go-selinux"
@@ -52,6 +53,7 @@ import (
 	kubelettypes "k8s.io/kubelet/pkg/types"
 	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
 	"k8s.io/kubernetes/pkg/features"
+	"k8s.io/kubernetes/pkg/kubelet/cm"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/events"
 	proberesults "k8s.io/kubernetes/pkg/kubelet/prober/results"
@@ -256,6 +258,12 @@ func (m *kubeGenericRuntimeManager) startContainer(ctx context.Context, podSandb
 		return s.Message(), ErrCreateContainerConfig
 	}
 
+	// When creating a container, mark the resources as actuated.
+	if err := m.allocationManager.SetActuatedResources(pod, container); err != nil {
+		m.recordContainerEvent(pod, container, "", v1.EventTypeWarning, events.FailedToCreateContainer, "Error: %v", err)
+		return err.Error(), ErrCreateContainerConfig
+	}
+
 	err = m.internalLifecycle.PreCreateContainer(pod, container, containerConfig)
 	if err != nil {
 		s, _ := grpcstatus.FromError(err)
@@ -399,10 +407,29 @@ func (m *kubeGenericRuntimeManager) updateContainerResources(pod *v1.Pod, contai
 	}
 	ctx := context.Background()
 	err := m.runtimeService.UpdateContainerResources(ctx, containerID.ID, containerResources)
-	if err != nil {
-		klog.ErrorS(err, "UpdateContainerResources failed", "container", containerID.String())
+	if err == nil {
+		err = m.allocationManager.SetActuatedResources(pod, container)
 	}
 	return err
+}
+
+func (m *kubeGenericRuntimeManager) updatePodSandboxResources(sandboxID string, pod *v1.Pod, podResources *cm.ResourceConfig) error {
+	podResourcesRequest := m.generateUpdatePodSandboxResourcesRequest(sandboxID, pod, podResources)
+	if podResourcesRequest == nil {
+		return fmt.Errorf("sandboxID %q updatePodSandboxResources failed: cannot generate resources config", sandboxID)
+	}
+
+	ctx := context.Background()
+	_, err := m.runtimeService.UpdatePodSandboxResources(ctx, podResourcesRequest)
+	if err != nil {
+		stat, _ := grpcstatus.FromError(err)
+		if stat.Code() == codes.Unimplemented {
+			klog.V(3).InfoS("updatePodSandboxResources failed: unimplemented; this call is best-effort: proceeding with resize", "sandboxID", sandboxID)
+			return nil
+		}
+		return fmt.Errorf("updatePodSandboxResources failed for sanboxID %q: %w", sandboxID, err)
+	}
+	return nil
 }
 
 // makeDevices generates container devices for kubelet runtime v1.
@@ -449,6 +476,7 @@ func (m *kubeGenericRuntimeManager) makeMounts(opts *kubecontainer.RunContainerO
 			Propagation:       v.Propagation,
 			RecursiveReadOnly: v.RecursiveReadOnly,
 			Image:             v.Image,
+			ImageSubPath:      v.ImageSubPath,
 		}
 
 		volumeMounts = append(volumeMounts, mount)
@@ -674,6 +702,7 @@ func toKubeContainerStatus(status *runtimeapi.ContainerStatus, runtimeName strin
 			SELinuxRelabel:    mount.SelinuxRelabel,
 			Propagation:       mount.Propagation,
 			Image:             mount.Image,
+			ImageSubPath:      mount.ImageSubPath,
 		})
 	}
 	return cStatus
@@ -1164,7 +1193,7 @@ func (m *kubeGenericRuntimeManager) computeInitContainerActions(pod *v1.Pod, pod
 					}
 				}
 
-				if IsInPlacePodVerticalScalingAllowed(pod) && !m.computePodResizeAction(pod, i, true, status, changes) {
+				if !m.computePodResizeAction(pod, i, true, status, changes) {
 					// computePodResizeAction updates 'changes' if resize policy requires restarting this container
 					break
 				}
